@@ -4,5 +4,6 @@ import com.google.inject.{Inject, Singleton}
 
 @Singleton
 case class Config @Inject()(
-  startMessage: String
+  accessKey: String,
+  secretKey: String,
 )
