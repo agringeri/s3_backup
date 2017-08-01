@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Configuration monitorInterval="10" packages="net.model3.logging.log4j">
+    <Properties>
+        <Property name="pattern">%d{ABSOLUTE} | %-5p | %t | %x | %c | %m%n</Property>
+        <Property name="logging.dir">${sys:logging.dir}</Property>
+        <Property name="logging.app.name">${sys:logging.app.name}</Property>
+    </Properties>
+
+    <Appenders>
+
+        <M3Console name="console">
+            <PatternLayout pattern="${pattern}"/>
+        </M3Console>
+
+        <RollingFile name="file-details">
+            <FileName>${logging.dir}/${logging.app.name}.details</FileName>
+            <FilePattern>${logging.dir}/archives/${logging.app.name}-%d{yyyyMMdd-HHmmss}.details.gz</FilePattern>
+            <PatternLayout pattern="${pattern}"/>
+            <Policies>
+                <OnStartupTriggeringPolicy/>
+                <SizeBasedTriggeringPolicy size="100 MB"/>
+                <TimeBasedTriggeringPolicy/>
+            </Policies>
+            <DefaultRolloverStrategy>
+                <Delete basePath="${logging.dir}/archives">
+                    <IfFileName glob="${logging.app.name}-*.details.gz">
+                        <IfAny>
+                            <IfLastModified age="30d"/>
+                            <IfAccumulatedFileSize exceeds="10 GB"/>
+                        </IfAny>
+                    </IfFileName>
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
+
+        <RollingFile name="file-errors">
+            <FileName>${logging.dir}/${logging.app.name}.errors</FileName>
+            <FilePattern>${logging.dir}/archives/${logging.app.name}-%d{yyyyMMdd-HHmmss}.errors.gz</FilePattern>
+            <PatternLayout pattern="${pattern}"/>
+            <ThresholdFilter level="WARN" onMatch="NEUTRAL" onMismatch="DENY"/>
+            <Policies>
+                <OnStartupTriggeringPolicy/>
+                <SizeBasedTriggeringPolicy size="100 MB"/>
+                <TimeBasedTriggeringPolicy/>
+            </Policies>
+            <DefaultRolloverStrategy>
+                <Delete basePath="logs/archives">
+                    <IfFileName glob="${logging.app.name}-*.errors.gz">
+                        <IfAny>
+                            <IfLastModified age="30d"/>
+                            <IfAccumulatedFileSize exceeds="10 GB"/>
+                        </IfAny>
+                    </IfFileName>
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
+
+        <Aggregate name="file">
+            <AppenderRef ref="file-details"/>
+            <AppenderRef ref="file-errors"/>
+        </Aggregate>
+    </Appenders>
+
+    <!-- log4jdbc config docs are here https://github.com/brunorozendo/log4jdbc-log4j2 -->
+
+    <Loggers>
+        <Logger name="org.apache.http" level="INFO"/>
+        <Logger name="net.sf.jasperreports" level="INFO"/>
+        <Logger name="org.apache.commons" level="INFO"/>
+        <Logger name="com.mchange" level="INFO"/>
+        <Logger name="org.quartz" level="INFO"/>
+        <Logger name="org.fusesource.scalate" level="INFO"/>
+        <Logger name="com.zaxxer.hikari.pool.HikariPool" level="INFO"/>
+        <Logger name="org.eclipse.jetty" level="INFO"/>
+        <Logger name="org.mortbay" level="INFO"/>
+        <Logger name="org.apache.jasper" level="INFO"/>
+
+        <logger name="log4jdbc.log4j2" level="info">
+            <Filters>
+                <MarkerFilter marker="LOG4JDBC_NON_STATEMENT" onMatch="DENY" onMismatch="NEUTRAL"/>
+                <ExceptionFilter className="java.sql.SQLFeatureNotSupportedException" onMatch="DENY" onMismatch="NEUTRAL"/>
+                <RegexFilter regex=".*select 1 from INFORMATION_SCHEMA.SYSTEM_USERS LIMIT 1.*" onMatch="DENY" onMismatch="NEUTRAL"/>
+                <RegexFilter regex=".*select 1\+1.*" onMatch="DENY" onMismatch="NEUTRAL"/>
+                <RegexFilter regex=".*select 1.*" onMatch="DENY" onMismatch="NEUTRAL"/>
+                <RegexFilter regex=".*Connection\.setNetworkTimeout.*" onMatch="DENY" onMismatch="NEUTRAL"/>
+            </Filters>
+        </logger>
+
+        <Root level="DEBUG">
+            <AppenderRef ref="console"/>
+            <AppenderRef ref="file-details"/>
+            <AppenderRef ref="file-errors"/>
+        </Root>
+    </Loggers>
+</Configuration>
