@@ -62,6 +62,13 @@
             <version>${m3Version}</version>
         </dependency>
 
+        <dependency>
+            <groupId>a8</groupId>
+            <artifactId>m3-test_2.12</artifactId>
+            <version>${m3Version}</version>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
 </project>

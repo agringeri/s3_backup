@@ -6,7 +6,7 @@ import net.codingwell.scalaguice.ScalaModule
 import net.model3.guice.bootstrap.ConfigurationDirectory
 import m3.predef._
 import m3.fs._
-import m3.json.{JsonAssist, Serialization}
+import m3.json._
 
 class GuiceModule extends ScalaModule with Logging {
 
