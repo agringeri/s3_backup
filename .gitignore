@@ -2,3 +2,5 @@
 target/
 *.iml
 config/config.json
+tracking.txt
+webapp-temp/
