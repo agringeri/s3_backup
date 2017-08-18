@@ -44,10 +44,6 @@ object S3Manager extends DaemonApp {
     */
   def uploadBackup(backupCategory: BackupCategory.Value, fileName: String, file: File): Unit = {
 
-    val listObjectsRequest =
-      new ListObjectsV2Request()
-        .withBucketName(awsConfig.bucketName)
-
     // Check if files under standard storage need to be purged (if config limit was lowered)
     val frequencies = BackupFrequency.values
     val categories = BackupCategory.values
