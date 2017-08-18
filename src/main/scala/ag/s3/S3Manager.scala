@@ -48,14 +48,6 @@ object S3Manager extends DaemonApp {
       new ListObjectsV2Request()
         .withBucketName(awsConfig.bucketName)
 
-    /*
-    Ignore files that may have been moved to GLACIER
-    (don't want to mess with those, leave that up to bucket lifecycle rules)
-     */
-    val standardObjectSummaries =
-      getStandardStorageClassSummaries(s3.listObjectsV2(listObjectsRequest).getObjectSummaries)
-
-
     // Check if files under standard storage need to be purged (if config limit was lowered)
     val frequencies = BackupFrequency.values
     val categories = BackupCategory.values
@@ -63,23 +55,27 @@ object S3Manager extends DaemonApp {
     for (frequency <- frequencies) {
       for (category <- categories) {
 
+        // This directory's summaries
+        // Ignore files that may have been moved to GLACIER (don't want to mess with those, leave that up to bucket lifecycle rules)
+        val thisDirectorySummaries = getStandardStorageClassSummaries(getTrueObjectSummaries(frequency, category))
+
         // Delete old keys in folder if needed
         val numExpiredKeys =
-          getNumKeysAboveLimit(
-            getStandardStorageClassSummaries(
-              getTrueObjectSummaries(frequency, category)), getFolderLimit(category, frequency))
+          getNumKeysAboveLimit(thisDirectorySummaries, getFolderLimit(category, frequency))
 
-        for (i <- 1 to numExpiredKeys) {
-          val oldestKey = getOldestKey(standardObjectSummaries)
-          s3.deleteObject(awsConfig.bucketName, oldestKey.get)
-          logger.info(s"Object deleted (${oldestKey.getOrElse("None")})")
+        if (numExpiredKeys > 0) {
+          for (i <- 1 to numExpiredKeys) {
+            val oldestKey = getOldestKey(thisDirectorySummaries)
+            s3.deleteObject(awsConfig.bucketName, oldestKey.get)
+            logger.info(s"Object deleted (${oldestKey.getOrElse("None")})")
+          }
         }
 
         // Is a new backup needed here?
         val isBackupNeeded = doesFolderNeedBackup(category, frequency, getStandardStorageClassSummaries(getTrueObjectSummaries(frequency, category)))
 
         // If the category matches and a backup is needed
-        // TODO: Currently set to force hourly backups to always upload, maybe change Duration values?
+        // Currently set to always backup to hourly, regardless if one has been placed within the hour
         if (backupCategory.equals(category) && isBackupNeeded) {
 
           // Upload new file
@@ -221,7 +217,10 @@ object S3Manager extends DaemonApp {
 
     // If the newest object was created within the last (hour, day, month)
     if (parseStringToDate(s3.getObjectMetadata(awsConfig.bucketName, newestKey).getUserMetaDataOf("date-created")).get
-      .isAfter(dateTimeNow.minus(getDuration(backupFrequency))))
+      .isAfter(dateTimeNow.minus(getDuration(backupFrequency))) ||
+      parseStringToDate(s3.getObjectMetadata(awsConfig.bucketName, newestKey).getUserMetaDataOf("date-created")).get
+        .isEqual(dateTimeNow.minus(getDuration(backupFrequency)))
+    )
     {
       // Don't need a backup
       false

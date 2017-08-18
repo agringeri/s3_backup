@@ -20,7 +20,7 @@ object Main extends ForegroundApp {
     }
 
     // Create file from argument
-    var file = new File(args(0).toLowerCase) // S3 Files are case sensitive - keep it underscore
+    val file = new File(args(0).toLowerCase) // S3 Files are case sensitive - keep it underscore
 
     // Get filetype (extension) from filename
     val fileType =

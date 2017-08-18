@@ -12,6 +12,6 @@ object Demo extends App with Logging {
 
   val config: Config = inject[Config]
 
-
+  // Demo
 
 }
