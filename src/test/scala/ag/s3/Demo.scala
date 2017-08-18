@@ -12,8 +12,4 @@ object Demo extends App with Logging {
 
   //S3Manager.uploadBackup(BackupCategory.gitlab, "test_backup.tar.gz", TestingTools.createSampleFile)
 
-  logger.info(
-    BackupCategory.values.map(v => (v.toString, v)).toMap.contains("gitla").toString
-  )
-
 }

@@ -16,8 +16,6 @@ object Main extends ForegroundApp {
 
     logger.info(s"args = ${args}")
 
-    val config: Config = inject[Config]
-
     // Check that an argument was passed
     if (args.size < 1) {
       logger.warn("Failed to pass in file argument. Pass in a filepath as the first argument where filepath is the absolute path to the file")

@@ -48,4 +48,19 @@ class GuiceModule extends ScalaModule with Logging {
       m3x.error(s"unable to find config file ${f.canonicalPath}")
   }
 
+  @Provides @Singleton
+  def awsConfig(cd: ConfigurationDirectory): AWSConfig = {
+    import m3.json.JsonAssist.{ logger => _, _}
+
+    implicit val serializer = Serialization.simpleJsonSerializer
+
+    val f = cd.get.file("aws-config.json")
+    val jsonStr = f.readText
+    logger.debug(s"loading ${classOf[AWSConfig]} from ${f.canonicalPath} -- \n${jsonStr}")
+    if ( f.exists )
+      parseHocon(jsonStr).deserialize[AWSConfig]
+    else
+      m3x.error(s"unable to find config file ${f.canonicalPath}")
+  }
+
 }
