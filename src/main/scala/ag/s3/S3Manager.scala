@@ -51,7 +51,10 @@ object S3Manager extends DaemonApp {
       new ListObjectsV2Request()
         .withBucketName(awsConfig.bucketName)
 
-    // Ignore files that may have been move to GLACIER
+    /*
+    Ignore files that may have been moved to GLACIER
+    (don't want to mess with those, leave that up to bucket lifecycle rules)
+     */
     val standardObjectSummaries =
       getStandardStorageClassSummaries(s3.listObjectsV2(listObjectsRequest).getObjectSummaries)
 
@@ -59,7 +62,6 @@ object S3Manager extends DaemonApp {
     // Check if files under standard storage need to be purged (if config limit was lowered)
     val frequencies = BackupFrequency.values
     val categories = BackupCategory.values
-
     // Traverse all folders specified in BackupFrequency and BackupCategory
     for (frequency <- frequencies) {
       for (category <- categories) {
@@ -79,9 +81,9 @@ object S3Manager extends DaemonApp {
         // Is a new backup needed here?
         val isBackupNeeded = doesFolderNeedBackup(category, frequency, getStandardStorageClassSummaries(getTrueObjectSummaries(frequency, category)))
 
-        // If a backup is needed
-        // TODO: possibly force hourly to always upload
-        if (isBackupNeeded) {
+        // If the category matches and a backup is needed
+        // TODO: possibly force hourly to always upload, maybe change Duration values?
+        if (backupCategory.equals(category) && isBackupNeeded) {
 
           // Upload new file
           putFile(frequency, category, fileName, file)
@@ -96,7 +98,6 @@ object S3Manager extends DaemonApp {
         }
       }
     }
-
   }
 
   /**
@@ -560,6 +561,5 @@ object S3Manager extends DaemonApp {
   }
 
   def test(b: Boolean) = b.equals(true)
-
 
 }

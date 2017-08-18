@@ -6,9 +6,6 @@ import net.model3.servlet.runner.JettyRunner
 import java.io.File
 import java.time._
 import java.time.format._
-import java.util._
-
-import m3.json.Handlers.dateTime
 
 object Main extends ForegroundApp {
 
@@ -18,7 +15,8 @@ object Main extends ForegroundApp {
 
     // Check that an argument was passed
     if (args.size < 1) {
-      logger.warn("Failed to pass in file argument. Pass in a filepath as the first argument where filepath is the absolute path to the file")
+      logger.warn("Failed to pass in file argument")
+      logger.warn("Enter a valid absolute path to a file as the first argument")
       System.exit(1)
     }
 
@@ -34,10 +32,8 @@ object Main extends ForegroundApp {
 
     // If the file path is not valid
     if (!file.isFile) {
-      logger.warn(
-        "The file path that was provided is not valid - the path is not a file\n" +
-          "Enter a valid absolute path to a file"
-      )
+      logger.warn("The filepath provided cannot be resolved")
+      logger.warn("Enter a valid absolute path to a file as the first argument")
       System.exit(1)
     }
 
@@ -65,7 +61,7 @@ object Main extends ForegroundApp {
     val newFileName =
       s"${backupType}_${timeStampForFileName}${fileType}"
 
-    logger.debug(newFileName)
+    logger.debug(s"Attempting to backup file: ${newFileName}")
 
     // Attempt upload
     S3Manager.uploadBackup(
@@ -74,6 +70,7 @@ object Main extends ForegroundApp {
       file
     )
 
+    System.exit(0)
   }
 
 }

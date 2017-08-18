@@ -9,5 +9,3 @@ case class AWSConfig @Inject()(
   bucketName: String,
   region: String,
 )
-
-

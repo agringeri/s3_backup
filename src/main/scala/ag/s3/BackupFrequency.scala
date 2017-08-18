@@ -10,4 +10,3 @@ object BackupFrequency extends Enumeration {
   val monthly = Value
 
 }
-
