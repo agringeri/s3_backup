@@ -13,6 +13,7 @@ class S3ManagerTest extends FunSpec with Logging {
     val actual = S3Manager.test(input)
     assertResult(expected)(actual)
   }
+  /*
 
   // Configuration
   val config: Config = inject[Config]
@@ -48,9 +49,6 @@ class S3ManagerTest extends FunSpec with Logging {
     val parsedTime: Date =
       S3Manager.parseStringToDate("Wed Aug 09 17:33:44 EDT 2017")
 
-    logger.warn(expectedTime.getTime.toString)
-    logger.warn(parsedTime.getTime.toString)
-
     // Are the string values equal?
     var isEqual: Boolean = false
     if (expectedTime.toString.equals(parsedTime.toString)) {
@@ -62,5 +60,99 @@ class S3ManagerTest extends FunSpec with Logging {
     test(isEqual, true)
   }
 
+  describe("UploadToFullFolder") {
+    val keyCount = S3Manager.getTrueKeyCount(config.bucketName, "test/fullDirectory_Hourly")
+
+    S3Manager.upload(
+      config.bucketName,
+      "test/fullDirectory_Hourly/",
+      s"test_file${scala.util.Random.nextInt(1000)}",
+      TestingTools.createSampleFile
+    )
+
+    var keyCountsEqual: Boolean = false
+    if (S3Manager.getTrueKeyCount(config.bucketName, "test/fullDirectory_Hourly") == keyCount) {
+      keyCountsEqual = true
+    } else
+      keyCountsEqual = false
+
+    test(keyCountsEqual, true)
+  }
+
+  describe("UploadToNonFullFolder") {
+    val keyCount = S3Manager.getTrueKeyCount(config.bucketName, "test/notFullFolder")
+
+    S3Manager.upload(
+      config.bucketName,
+      "test/notFullFolder/",
+      s"test_file${scala.util.Random.nextInt(1000)}",
+      TestingTools.createSampleFile
+    )
+
+    var keyCountIncreasedByOne: Boolean = false
+    if (S3Manager.getTrueKeyCount(config.bucketName, "test/notFullFolder") == (keyCount + 1)) {
+      keyCountIncreasedByOne = true
+    } else
+      keyCountIncreasedByOne = false
+
+    test(keyCountIncreasedByOne, true)
+  }
+
+  describe("PurgeDirectory_NonEmptyDirectory") {
+
+    // Put a file in the directory to test purging
+    S3Manager.upload(
+      config.bucketName,
+      "test/testPurge/",
+      s"test_file${scala.util.Random.nextInt(1000)}",
+      TestingTools.createSampleFile
+    )
+
+    val keyCountWithFiles = S3Manager.getTrueKeyCount(config.bucketName, "test/testPurge/")
+
+    // Purge directory
+    S3Manager.purgeDirectory(config.bucketName, "test/testPurge/")
+
+    val keyCountAfterPurge = S3Manager.getTrueKeyCount(config.bucketName, "test/testPurge/")
+
+    var didPurge = false
+    if (keyCountWithFiles > 0 && keyCountAfterPurge == 0) {
+      didPurge = true
+    } else {
+      didPurge = false
+    }
+
+    test(didPurge, true)
+
+  }
+
+  describe("PurgeDirectory_EmptyDirectory") {
+
+    val keyCountWithFiles = S3Manager.getTrueKeyCount(config.bucketName, "test/empty/")
+
+    // Purge directory
+    S3Manager.purgeDirectory(config.bucketName, "test/empty/")
+
+    val keyCountAfterPurge = S3Manager.getTrueKeyCount(config.bucketName, "test/empty/")
+
+    var didPurge = false
+    if (keyCountWithFiles == keyCountAfterPurge) {
+      didPurge = true
+    } else {
+      didPurge = false
+    }
+
+    test(didPurge, true)
+  }
+
+  describe("TestGetStorageClassKeyCount_STANDARD") {
+
+    val standardStorageKeyCount =
+      S3Manager.getStandardStorageClassKeyCount(config.bucketName, "test/standardStorageClassObjects/")
+
+    test(standardStorageKeyCount == 2, true)
+  }
+
+  */
 
 }

@@ -7,18 +7,23 @@ case class Config @Inject()(
   accessKey: String,
   secretKey: String,
   bucketName: String,
-  s3BackupLimits: S3BackupLimits,
-  glacierBackupLimits: GlacierBackupLimits,
+  region: String,
+  backupLimits: BackupLimits
 )
 
-case class S3BackupLimits(
-                           hourly: Int,
-                           daily: Int,
-                           monthly: Int,
-                         )
+case class BackupLimits (
+                        gitlab: Gitlab,
+                        postgres: Postgres,
+                        )
 
-case class GlacierBackupLimits(
-                                hourly: Int,
-                                daily: Int,
-                                monthly: Int,
-                              )
+case class Gitlab (
+                    hourly: Int,
+                    daily: Int,
+                    monthly: Int,
+                  )
+
+case class Postgres (
+                      hourly: Int,
+                      daily: Int,
+                      monthly: Int,
+                    )

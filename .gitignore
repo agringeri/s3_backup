@@ -1,6 +1,6 @@
 .idea/
 target/
 *.iml
-config/config.json
+config/
 tracking.txt
 webapp-temp/

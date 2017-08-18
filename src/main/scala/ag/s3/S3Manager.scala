@@ -5,6 +5,9 @@ import java.io._
 import java.text._
 import java.util
 import java.util._
+import java.time._
+import java.time.format.DateTimeFormatter
+import java.time.temporal.TemporalAmount
 
 import com.amazonaws.auth._
 import com.amazonaws._
@@ -17,7 +20,6 @@ import m3.predef.inject
 
 object S3Manager extends DaemonApp {
 
-  // Inject Configuration
   val config: Config = inject[Config]
 
   // Set up AWS credentials
@@ -31,50 +33,85 @@ object S3Manager extends DaemonApp {
     AmazonS3ClientBuilder
       .standard
       .withCredentials(new AWSStaticCredentialsProvider(credentials))
-      .withRegion("us-east-1")
+      .withRegion(config.region)
       .withForceGlobalBucketAccessEnabled(true)
       .build()
 
   /**
-    * Uploads a file to Amazon S3
-    *
-    * If there are LESS files present in the given location than specified in the Config
-    * - The new file will be uploaded and no files will be removed
-    *
-    * If there are MORE files present in the given location than specified in the Config
-    * - The new file will be uploaded and the oldest existing file in the location will be removed
-    *
-    * @param bucketName the name of the Amazon S3 bucket
-    * @param location the location of the object to be uploaded (omit file name, path should end in "/")
-    * @param fileName the filename of the object to be uploaded
-    * @param file object to be uploaded
+    * Uploads a backup file where necessary, when necessary.
+    * Acts as entry point to rest of methods
+    * @param backupCategory
+    * @param fileName
+    * @param file
     */
-  def upload(bucketName: String, location: String, fileName: String, file: File): Unit = {
-    val fullPath: String =
-      location + fileName
-    val isFolderAtLimitValue: Boolean =
-      isFolderAtLimit(bucketName, location)
+  def uploadBackup(backupCategory: BackupCategory.Value, fileName: String, file: File): Unit = {
+
+    val listObjectsRequest =
+      new ListObjectsV2Request()
+        .withBucketName(config.bucketName)
+
+    // Ignore files that may have been move to GLACIER
+    val standardObjectSummaries =
+      getStandardStorageClassSummaries(s3.listObjectsV2(listObjectsRequest).getObjectSummaries)
+
+
+    // Check if files under standard storage need to be purged (if config limit was lowered)
+    val frequencies = BackupFrequency.values
+    val categories = BackupCategory.values
+
+    // Traverse all folders specified in BackupFrequency and BackupCategory
+    for (frequency <- frequencies) {
+      for (category <- categories) {
+
+        // Delete old keys in folder if needed
+        val numExpiredKeys = getNumKeysAboveLimit(getTrueObjectSummaries(frequency, category), getFolderLimit(category, frequency))
+        for (i <- 1 to numExpiredKeys) {
+          val oldestKey = getOldestKey(standardObjectSummaries)
+          s3.deleteObject(config.bucketName, oldestKey.get)
+          logger.info(s"Object deleted (${oldestKey.getOrElse("None")})")
+        }
+
+        // Is a new backup needed here?
+        val isBackupNeeded = doesFolderNeedBackup(category, frequency, getTrueObjectSummaries(frequency, category))
+
+        // If a backup is needed
+        // TODO: possibly force hourly to always upload
+        if (isBackupNeeded) {
+
+          // Upload new file
+          putFile(frequency, category, fileName, file)
+          logger.info(s"New ${category} backup uploaded: (${getPath(frequency, category)}${fileName})")
+
+          // If the limit is now exceeded, delete the oldest one
+          if (isFolderAboveLimit(category, frequency)) {
+            val oldestKey = getOldestKey(getTrueObjectSummaries(frequency, category)).getOrElse("")
+            deleteFile(oldestKey)
+            logger.info(s"Old ${category} backup deleted: ${oldestKey}")
+          }
+        }
+      }
+    }
+
+  }
+
+  /**
+    * Puts a file in S3
+    * @param backupFrequency frequency of backup
+    * @param backupCategory category of backup
+    * @param fileName the name of the file (just file name, not full path)
+    * @param file the file to put
+    */
+  def putFile(backupFrequency: BackupFrequency.Value, backupCategory: BackupCategory.Value, fileName: String, file: File): Unit = {
+    // Create request to put object
+    val putObjectRequest = new PutObjectRequest(
+      config.bucketName,
+      s"${getPath(backupFrequency, backupCategory)}$fileName",
+      file
+    ).withMetadata(generateTimeStampMetadata())
 
     try {
-
-      if (!isFolderAtLimitValue) {
-
-        // Just upload
-        s3.putObject(new PutObjectRequest(bucketName, fullPath, file).withMetadata(generateTimeStampMetadata()))
-        val objectMetadata = s3.getObjectMetadata(bucketName, fullPath).getUserMetaDataOf("date-created")
-        logger.debug(s"Object (${fullPath}) added to bucket (${bucketName})")
-        logger.debug(s"Object (${fullPath}) has the following creation-date: (${objectMetadata})")
-
-      } else {
-
-        // Upload and delete oldest object
-        s3.putObject(new PutObjectRequest(bucketName, fullPath, file).withMetadata(generateTimeStampMetadata()))
-        val deletedObjectKey = deleteOldestObject(bucketName, location)
-        val objectMetadata = s3.getObjectMetadata(bucketName, fullPath).getUserMetaDataOf("date-created")
-        logger.debug(s"Object (${deletedObjectKey.orNull}) deleted from bucket ($bucketName), object (${fullPath}) added to bucket (${bucketName})")
-        logger.debug(s"Object (${fullPath}) has the following creation-date: (${objectMetadata})")
-      }
-
+      // Attempt to upload the object with the proper metadata
+      s3.putObject(putObjectRequest)
     } catch {
       case ase: AmazonServiceException =>
         val msg =
@@ -102,24 +139,18 @@ object S3Manager extends DaemonApp {
   }
 
   /**
-    * Deletes file (given its key) from Amazon S3
-    *
-    * @param bucketName the name of the Amazon S3 bucket
-    * @param key the filename of the object to be deleted
+    * Deletes a file from S3
+    * @param key the key of the file to delete
     */
-  def delete(bucketName: String, key: String): Unit = {
+  def deleteFile(key: String): Unit = {
+    val deleteObjectRequest = new DeleteObjectRequest(
+      config.bucketName,
+      key
+    )
+
     try {
-
-      if (s3.doesObjectExist(bucketName, key)) {
-        s3.deleteObject(bucketName, key)
-        logger.debug(s"File (${key}) deleted from bucket (${bucketName})")
-
-      } else {
-
-        logger.warn(s"Delete request failed: File (${key}) does not exist in bucket (${bucketName})")
-
-      }
-
+      // Attempt to delete object
+      s3.deleteObject(deleteObjectRequest)
     } catch {
       case ase: AmazonServiceException =>
         val msg =
@@ -147,91 +178,144 @@ object S3Manager extends DaemonApp {
   }
 
   /**
-    * Delete oldest object within given location in a bucket
+    * Purges (completely empties) a given directory (prefix) in an Amazon S3 bucket
     *
-    * For example, calling:
-    *   deleteOldestObject("bucket-name", "daily")
-    * will delete the oldest object within the "bucket-name" bucket, and within the "daily" folder
-    *
-    * @param bucketName the name of the Amazon S3 bucket
-    * @param location the location of the directory to be checked
-    * @return the key of the deleted object
+    * @param backupFrequency frequency of backup to purge (ex: hourly, daily, monthly)
+    * @param backupCategory type of backup to purge (ex: gitlab, postgres)
     */
-  def deleteOldestObject(bucketName: String, location: String): Option[String] = {
+  def purgeEntireDirectory(backupFrequency: BackupFrequency.Value, backupCategory: BackupCategory.Value): Unit = {
 
-    var oldestObjectKey: Option[String] = None
+    val request = new ListObjectsV2Request()
+      .withBucketName(config.bucketName)
+      .withPrefix(
+        s"${backupFrequency.toString.toLowerCase}/${backupCategory.toString.toLowerCase}/"
+      )
 
-    // Check that there are files in the folder
-    if (!isFolderEmpty(bucketName, location)) {
+    val summaries = getOnlyTrueObjects(
+      s3.listObjectsV2(request).getObjectSummaries
+    )
 
-      // Retrieve first object for later comparison
-      oldestObjectKey = Some(filterSummaries(s3.listObjectsV2(bucketName, location).getObjectSummaries, location).get(0).getKey)
+    for (i <- 0 until summaries.size) {
+      val keyToDelete = summaries.get(i).getKey
+      s3.deleteObject(config.bucketName, keyToDelete)
+      logger.debug(s"Object deleted:(${keyToDelete})")
+    }
 
-      // Iterate over all objectListings and find earliest creation date
-      val listObjectsRequest = new ListObjectsV2Request()
-        .withBucketName(bucketName)
-        .withPrefix(location)
+  }
 
-      var objectListing = new ListObjectsV2Result()
-      objectListing = s3.listObjectsV2(listObjectsRequest)
-      val filteredObjectSummaries = filterSummaries(objectListing.getObjectSummaries, location)
+  /**
+    * Returns whether a folder needs a backup or not
+    * @param backupCategory category of backup
+    * @param backupFrequency frequency of backup
+    * @param summaries the summaries from the folder to check
+    * @return true if folder needs backup, false if not
+    */
+  def doesFolderNeedBackup(backupCategory: BackupCategory.Value, backupFrequency: BackupFrequency.Value, summaries: util.List[S3ObjectSummary]): Boolean = {
 
-      for (objectSummary <- filteredObjectSummaries.asScala) {
+    val dateTimeNow = LocalDateTime.now
 
-        // Retrieve metadata of current object
-        val currentCreationDate = s3.getObjectMetadata(bucketName, objectSummary.getKey).getUserMetaDataOf("date-created")
-        logger.warn(s3.getObjectMetadata(bucketName, objectSummary.getKey).getUserMetaDataOf("date-created"))
+    val newestKey = getNewestKey(summaries).getOrElse(return true)
 
-        // Is current object's date-created before the "oldest"?
-        if (parseStringToDate(currentCreationDate)
-          .before(parseStringToDate(s3.getObjectMetadata(bucketName, oldestObjectKey.get) // getOrElse should never occur
-            .getUserMetaDataOf("date-created"))))
-        { oldestObjectKey = Some(objectSummary.getKey) }
+    // If the newest object was created within the last (hour, day, month)
+    if (parseStringToDate(s3.getObjectMetadata(config.bucketName, newestKey).getUserMetaDataOf("date-created")).get
+      .isAfter(dateTimeNow.minus(getDuration(backupFrequency))))
+    {
+      // Don't need a backup
+      false
+    } else {
+      // Need a new backup
+      true
+    }
 
-      }
+  }
 
-      // Oldest object is identified, now delete it
-      S3Manager.delete(bucketName, oldestObjectKey.get)
+  /**
+    * Gets the number of files that are above the limit, if any
+    * @param summaries the List of S3 summaries
+    * @param limit the limit to check
+    * @return the number of files that are above the limit, if any
+    */
+  def getNumKeysAboveLimit(summaries: util.List[S3ObjectSummary], limit: Int): Int = {
+    if (summaries.size > limit) {
+      summaries.size - limit
+    } else {
+      0
+    }
+  }
+
+  /**
+    * Returns the newest key (based on metadata) from a listing
+    * @param summaries the List of S3 summaries
+    * @return the newest key, if there is one
+    */
+  def getNewestKey(summaries: util.List[S3ObjectSummary]): Option[String] = {
+    if (isSummaryListingEmpty(summaries) == true) {
+      None
 
     } else {
 
-      // Log error warning and return None (nothing deleted)
-      logger.warn(s"There are no objects contained in bucket (${bucketName}) in folder (${location})")
+      var currentNewestItem = (
+        summaries.get(0).getKey,
+        s3.getObjectMetadata(config.bucketName, summaries.get(0).getKey).getUserMetaDataOf("date-created")
+      )
 
+      for (summary <- summaries.asScala) {
+        val thisDate =
+          parseStringToDate(s3.getObjectMetadata(config.bucketName, summary.getKey).getUserMetaDataOf("date-created")).get
+        if (thisDate.isAfter(parseStringToDate(currentNewestItem._2).get))
+        {
+          currentNewestItem = (
+            summary.getKey,
+            s3.getObjectMetadata(config.bucketName, summary.getKey).getUserMetaDataOf("date-created")
+          )
+        }
+      }
+
+      Some(currentNewestItem._1)
     }
-
-    // Returns None if nothing was deleted (i.e. empty directory)
-    oldestObjectKey
   }
 
-  def getObjects(bucketName: String, prefix: String): ListObjectsV2Result = {
-    s3.listObjectsV2(bucketName, prefix)
+  /**
+    * Returns the oldest key (based on metadata) from a listing
+    * @param summaries the List of S3 summaries
+    * @return the oldest key, if there is one
+    */
+  def getOldestKey(summaries: util.List[S3ObjectSummary]): Option[String] = {
+    if (isSummaryListingEmpty(summaries) == true) {
+      None
+
+    } else {
+
+      var currentOldestItem = (
+        summaries.get(0).getKey,
+        s3.getObjectMetadata(config.bucketName, summaries.get(0).getKey).getUserMetaDataOf("date-created")
+      )
+
+      for (summary <- summaries.asScala) {
+        val thisDate =
+          parseStringToDate(s3.getObjectMetadata(config.bucketName, summary.getKey).getUserMetaDataOf("date-created")).get
+        if (thisDate.isBefore(parseStringToDate(currentOldestItem._2).get))
+        {
+          currentOldestItem = (
+            summary.getKey,
+            s3.getObjectMetadata(config.bucketName, summary.getKey).getUserMetaDataOf("date-created")
+          )
+        }
+      }
+
+      Some(currentOldestItem._1)
+    }
   }
 
   /**
     * Checks if a given folderName is empty (has any files)
-    *
-    * @param bucketName the name of the Amazon S3 bucket
-    * @param folderName the name of the folder (or path) to check
-    * @return true if given folder (or path) is empty, false otherwise
+    * @return true if given folder (path) is empty (contains no objects), false otherwise
     */
-  def isFolderEmpty(bucketName: String, folderName: String): Boolean = {
-    val request = new ListObjectsV2Request()
-      .withBucketName(bucketName)
-      .withPrefix(folderName)
-      .withDelimiter("/")
+  def isSummaryListingEmpty(summaries: util.List[S3ObjectSummary]): Boolean = {
 
-    val filteredSummaries: util.List[S3ObjectSummary] =
-      filterSummaries(
-        s3.listObjectsV2(request).getObjectSummaries,
-        folderName
-      )
+    val trueObjects = getOnlyTrueObjects(summaries)
 
-    for (summary <- filteredSummaries.asScala) {
-      logger.warn(summary.getKey)
-    }
-
-    if (filteredSummaries.size <= 0) {
+    if (trueObjects.size <= 0) {
       true
     } else {
       false
@@ -239,51 +323,82 @@ object S3Manager extends DaemonApp {
   }
 
   /**
-    * Checks if the folder is at the specified limit according to Config
-    *
-    * For example, calling
-    *   isFolderAtLimit("bucket-name", "daily")
-    * will return true if the maximum number of daily backups is reached, and false otherwise
-    *
-    * @param bucketName the name of the Amazon S3 bucket
-    * @param folderName name of folder (or path) to check
+    * Checks if the folder is at the specified limit according to config
+    * @param backupCategory category of backup
+    * @param backupFrequency frequency of backup
     * @return true if folder is >= corresponding limit, false otherwise
     */
-  def isFolderAtLimit(bucketName: String, folderName: String): Boolean = {
+  def isFolderAtLimit(backupCategory: BackupCategory.Value, backupFrequency: BackupFrequency.Value): Boolean = {
+    val request = new ListObjectsV2Request()
+      .withBucketName(config.bucketName)
+      .withPrefix(s"${backupFrequency.toString.toLowerCase}/${backupCategory.toString.toLowerCase}/")
+
     val objectSummaries =
-      s3.listObjectsV2(bucketName, folderName).getObjectSummaries
+      getOnlyTrueObjects(
+        s3.listObjectsV2(request).getObjectSummaries
+      )
 
-    filterSummaries(objectSummaries, folderName)
+    val keyCount = objectSummaries.size
 
-    if (objectSummaries.size >= getFolderLimit(folderName)) {
+    if (keyCount >= getFolderLimit(backupCategory, backupFrequency)) {
       true
     } else {
       false
     }
   }
+
+  /**
+    * Checks if the folder is at OR ABOVE the specified limit according to config
+    * @param backupCategory category of backup
+    * @param backupFrequency frequency of backup
+    * @return true if folder is strictly > corresponding limit, false otherwise
+    */
+  def isFolderAboveLimit(backupCategory: BackupCategory.Value, backupFrequency: BackupFrequency.Value): Boolean = {
+    val request = new ListObjectsV2Request()
+      .withBucketName(config.bucketName)
+      .withPrefix(s"${backupFrequency.toString.toLowerCase}/${backupCategory.toString.toLowerCase}/")
+
+    val objectSummaries =
+      getOnlyTrueObjects(
+        s3.listObjectsV2(request).getObjectSummaries
+      )
+
+    val keyCount = objectSummaries.size
+
+    if (keyCount > getFolderLimit(backupCategory, backupFrequency)) {
+      true
+    } else {
+      false
+    }
+  }
+
 
   /**
     * Returns the limit for a given folder
-    *
-    * Note: this method will discard the prefix of the folderName and only match against the last argument
-    * Example: passing ("test/myFolder/hourly") will match successfully against "hourly"
-    *
-    * @param folderName the name of folder (or path)
-    * @return the limit of the folder according to config
+    * @param backupCategory category of backup
+    * @param backupFrequency frequency of backup
+    * @return the limit of a given folder
     */
-  def getFolderLimit(folderName: String): Int = {
-    // Just give last part of folderName, discard prefix
-    (folderName.split("/").min) match {
-      case "hourly" => config.s3BackupLimits.hourly
-      case "daily" => config.s3BackupLimits.daily
-      case "monthly" => config.s3BackupLimits.monthly
+  def getFolderLimit(backupCategory: BackupCategory.Value, backupFrequency: BackupFrequency.Value): Int = {
 
-      // TODO: Remove this before deployment, this is for testing
-      case "orderedFilesHourlyExample" => config.s3BackupLimits.hourly
-      case "notEmpty" => config.s3BackupLimits.hourly
-      case "fullDirectory_Hourly" => config.s3BackupLimits.hourly
+    val freqMatch = backupFrequency.toString
+    val typeMatch = backupCategory.toString
 
-      case _ => -1
+    freqMatch match {
+      case "hourly" => typeMatch match {
+        case "gitlab" => config.backupLimits.gitlab.hourly
+        case "postgres" => config.backupLimits.postgres.hourly
+      }
+      case "daily" => typeMatch match {
+        case "gitlab" => config.backupLimits.gitlab.daily
+        case "postgres" => config.backupLimits.postgres.daily
+      }
+      case "monthly" => typeMatch match {
+        case "gitlab" => config.backupLimits.gitlab.monthly
+        case "postgres" => config.backupLimits.postgres.monthly
+      }
+
+      case _ => Int.MaxValue // hacky
     }
   }
 
@@ -291,24 +406,25 @@ object S3Manager extends DaemonApp {
     * Parses a String to a Date object
     * Used for analyzing metadata (which is in String form)
     *
-    * Sample: "Wed Aug 09 17:33:44 EDT 2017" -> Corresponding Date Object
+    * Format: yyyyMMdd'_'HHmmss
+    *
+    * Sample: "20170817_162042" -> Corresponding DateTime Object
     *
     * @param s the string being parsed
-    * @return the date object corresponding to format
+    * @return the DateTime object corresponding to format
     */
-  def parseStringToDate(s: String): Date = {
+  def parseStringToDate(s: String): Option[LocalDateTime] = {
 
-    val cal = Calendar.getInstance
-    val sdf = new SimpleDateFormat("EEE MMM dd HH:mm:ss z yyyy")
+    val formatter = DateTimeFormatter.ofPattern("yyyyMMdd'_'HHmmss")
 
     try {
-      cal.setTime(sdf.parse(s))
+      val dateTime = LocalDateTime.from(formatter.parse(s))
+      Some(dateTime)
     } catch {
-      case pe : ParseException =>
-        logger.warn("Method parseStringToDate received a String in an incorrect format. Unable to generate Date object", pe)
+      case iae : IllegalArgumentException =>
+        logger.warn("Method parseStringToDate received a String in an incorrect format. Unable to generate Date object", iae)
+        None
     }
-
-    cal.getTime
   }
 
   /**
@@ -317,14 +433,96 @@ object S3Manager extends DaemonApp {
     * @return ObjectMetadata object with current-time metadata
     */
   def generateTimeStampMetadata(): ObjectMetadata = {
-    val thisDate: String = Calendar.getInstance(TimeZone.getTimeZone("US/Eastern")).getTime.toString
+    val f = DateTimeFormatter.ofPattern("yyyyMMdd'_'HHmmss")
+    val thisTimeStamp = LocalDateTime.now.format(f)
+
     val metaDataToAdd: ObjectMetadata = new ObjectMetadata()
-    metaDataToAdd.addUserMetadata("date-created", thisDate)
+    metaDataToAdd.addUserMetadata("date-created", thisTimeStamp)
     metaDataToAdd
   }
 
   /**
-    * Filters an S3ObjectSummary List by removing itself in it's own object listing
+    * Get a List of S3ObjectSummaries that are in the STANDARD storage class.
+    *
+    * @param summaries List of S3ObjectSummaries
+    * @return List of S3ObjectSummaries that match the prefix and are in the STANDARD storage class
+    */
+  def getStandardStorageClassSummaries(summaries: util.List[S3ObjectSummary]): util.List[S3ObjectSummary] = {
+    var newSummaries = summaries
+
+    val iter = newSummaries.iterator
+    while (iter.hasNext) {
+      val item = iter.next
+
+      if (!item.getStorageClass.equals("STANDARD")) {
+        iter.remove()
+      }
+    }
+
+    newSummaries
+  }
+
+  /**
+    * Get a List of S3ObjectSummaries that are in the GLACIER storage class.
+    *
+    * @param summaries the original List of S3ObjectSummaries
+    * @return List of S3ObjectSummaries that are in the GLACIER storage class
+    */
+  def getGlacierStorageClassSummaries(summaries: util.List[S3ObjectSummary]): util.List[S3ObjectSummary] = {
+    val newSummaries = summaries
+
+    val iter = summaries.iterator
+    while (iter.hasNext) {
+      val item = iter.next
+
+      if (!item.getStorageClass.equals("GLACIER")) {
+        iter.remove()
+      }
+    }
+
+    newSummaries
+  }
+
+  /**
+    * Get a List of S3ObjectSummaries that are in the STANDARD_IA storage class.
+    *
+    * @param summaries the original List of S3ObjectSummaries
+    * @return List of S3ObjectSummaries that are in the STANDARD_IA storage class
+    */
+  def getStandardIAStorageClassSummaries(summaries: util.List[S3ObjectSummary]): util.List[S3ObjectSummary] = {
+    val newSummaries = summaries
+
+    val iter = summaries.iterator
+    while (iter.hasNext) {
+      val item = iter.next
+
+      if (!item.getStorageClass.equals("STANDARD_IA")) {
+        iter.remove()
+      }
+    }
+
+    summaries
+  }
+
+  /**
+    * Returns only the summaries in the scope of the frequency and category
+    * @param backupFrequency frequency of backup
+    * @param backupCategory category of backup
+    * @return the summaries within scope
+    */
+  def getTrueObjectSummaries(backupFrequency: BackupFrequency.Value, backupCategory: BackupCategory.Value): util.List[S3ObjectSummary] = {
+    val pathToObjects = s"${backupFrequency}/${backupCategory}/"
+
+    getOnlyTrueObjects(
+      s3.listObjectsV2(
+        config.bucketName,
+        pathToObjects
+      ).getObjectSummaries
+    )
+  }
+
+  /**
+    * Filters an S3ObjectSummary List by removing summaries that refer to directories, not objects
     *
     * For example, if listObjects were performed on a bucket with prefix "hourly/",
     * an example of the listing of keys would be:
@@ -336,26 +534,50 @@ object S3Manager extends DaemonApp {
     *
     * This method removes the "hourly/" listing
     *
-    * @param summaries the list of S3ObjectSummary
-    * @param filter the name of the folder to filter out
-    * @return new list of S3ObjectSummary without itself in it
+    * @param summaries the List of S3ObjectSummary
+    * @return new list of S3ObjectSummary without directory listings
     */
-  def filterSummaries(summaries: util.List[S3ObjectSummary], filter: String): util.List[S3ObjectSummary] = {
+  def getOnlyTrueObjects(summaries: util.List[S3ObjectSummary]): util.List[S3ObjectSummary] = {
 
-    val filteredSummaries: util.List[S3ObjectSummary] = summaries
+    val trueSummaries = summaries
 
-    // Iterate through summaries and remove any summaries that are self-descriptive (equal to folderName argument)
-    val iter = filteredSummaries.iterator
+    // Iterate through summaries and remove any summaries refer to "directories"
+    val iter = trueSummaries.iterator
     while (iter.hasNext) {
       val item = iter.next
 
-      if (item.getKey.equals(filter)) {
+      if (item.getKey.endsWith("/")) {
         iter.remove()
       }
     }
 
-    filteredSummaries
+    trueSummaries
+  }
+
+  /**
+    * Get the path to a file using the frequency and category of a backup
+    * @param backupFrequency frequency of backup
+    * @param backupCategory category of backup
+    * @return the path to the file
+    */
+  def getPath(backupFrequency: BackupFrequency.Value, backupCategory: BackupCategory.Value): String = {
+    s"${backupFrequency}/${backupCategory}/"
+  }
+
+  /**
+    * Matches a string frequency (hourly, daily, etc) to a TemporalAmount representing a length of time
+    * @param backupFrequency frequency of backup
+    * @return the length of time represented by backupFrequency
+    */
+  def getDuration(backupFrequency: BackupFrequency.Value): TemporalAmount = {
+    backupFrequency match {
+      case BackupFrequency.hourly => Duration.ofHours(1)
+      case BackupFrequency.daily => Period.ofDays(1)
+      case BackupFrequency.monthly => Period.ofMonths(1)
+    }
   }
 
   def test(b: Boolean) = b.equals(true)
+
+
 }
