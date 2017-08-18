@@ -2,7 +2,6 @@ package ag.s3
 
 import m3.guice._
 import m3.predef._
-import net.model3.servlet.runner.JettyRunner
 import java.io.File
 import java.time._
 import java.time.format._

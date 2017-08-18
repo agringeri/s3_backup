@@ -2,9 +2,7 @@ package ag.s3
 
 import scala.collection.JavaConverters._
 import java.io._
-import java.text._
 import java.util
-import java.util._
 import java.time._
 import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAmount
@@ -13,8 +11,7 @@ import com.amazonaws.auth._
 import com.amazonaws._
 import com.amazonaws.services.s3._
 import com.amazonaws.services.s3.model._
-import com.amazonaws.services.s3.model.ObjectMetadata
-import com.amazonaws.services.s3.model.S3ObjectSummary
+
 import m3.guice.DaemonApp
 import m3.predef.inject
 
@@ -82,7 +79,7 @@ object S3Manager extends DaemonApp {
         val isBackupNeeded = doesFolderNeedBackup(category, frequency, getStandardStorageClassSummaries(getTrueObjectSummaries(frequency, category)))
 
         // If the category matches and a backup is needed
-        // TODO: possibly force hourly to always upload, maybe change Duration values?
+        // TODO: Currently set to force hourly backups to always upload, maybe change Duration values?
         if (backupCategory.equals(category) && isBackupNeeded) {
 
           // Upload new file
