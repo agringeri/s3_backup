@@ -9,7 +9,7 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <scalaVersion>2.12.2</scalaVersion>
+        <scalaVersion>2.12.3</scalaVersion>
         <m3Version>2.6.0-1707131231</m3Version>
     </properties>
 
@@ -70,6 +70,18 @@
         </dependency>
 
     </dependencies>
+
+    <distributionManagement>
+        <!-- autogen-begin == do not change any of the following settings's since they are auto generated any changes will get overwritten at the next auto generation event  -->
+        <repository>
+            <uniqueVersion>false</uniqueVersion>
+            <id>artifactory</id>
+            <name>artifactory-release</name>
+            <url>${artifactory-release-url}</url>
+            <layout>default</layout>
+        </repository>
+        <!-- autogen-end  -->
+    </distributionManagement>
 
     <build>
         <plugins>
