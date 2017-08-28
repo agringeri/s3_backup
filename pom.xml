@@ -71,18 +71,6 @@
 
     </dependencies>
 
-    <distributionManagement>
-        <!-- autogen-begin == do not change any of the following settings's since they are auto generated any changes will get overwritten at the next auto generation event  -->
-        <repository>
-            <uniqueVersion>false</uniqueVersion>
-            <id>artifactory</id>
-            <name>artifactory-release</name>
-            <url>${artifactory-release-url}</url>
-            <layout>default</layout>
-        </repository>
-        <!-- autogen-end  -->
-    </distributionManagement>
-
     <build>
         <plugins>
             <plugin>
