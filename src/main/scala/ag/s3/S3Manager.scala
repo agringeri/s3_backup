@@ -11,7 +11,6 @@ import com.amazonaws.auth._
 import com.amazonaws._
 import com.amazonaws.services.s3._
 import com.amazonaws.services.s3.model._
-
 import m3.guice.DaemonApp
 import m3.predef.inject
 
@@ -62,8 +61,10 @@ object S3Manager extends DaemonApp {
         if (numExpiredKeys > 0) {
           for (i <- 1 to numExpiredKeys) {
             val oldestKey = getOldestKey(thisDirectorySummaries)
-            s3.deleteObject(awsConfig.bucketName, oldestKey.get)
-            logger.info(s"Object deleted (${oldestKey.getOrElse("None")})")
+            oldestKey.foreach { key =>
+              s3.deleteObject(awsConfig.bucketName, key)
+              logger.info(s"Object deleted (${key})")
+            }
           }
         }
 
@@ -211,17 +212,27 @@ object S3Manager extends DaemonApp {
 
     val newestKey = getNewestKey(summaries).getOrElse(return true)
 
-    // If the newest object was created within the last (hour, day, month)
-    if (parseStringToDate(s3.getObjectMetadata(awsConfig.bucketName, newestKey).getUserMetaDataOf("date-created")).get
-      .isAfter(dateTimeNow.minus(getDuration(backupFrequency))) ||
-      parseStringToDate(s3.getObjectMetadata(awsConfig.bucketName, newestKey).getUserMetaDataOf("date-created")).get
-        .isEqual(dateTimeNow.minus(getDuration(backupFrequency)))
-    )
-    {
-      // Don't need a backup
+    val localDateTime: Option[LocalDateTime] =
+      parseStringToDate(
+        s3
+          .getObjectMetadata(awsConfig.bucketName, newestKey)
+          .getUserMetaDataOf("date-created")
+      )
+
+    val localDateTimeNow: LocalDateTime =
+      dateTimeNow
+        .minus(getDuration(backupFrequency))
+
+    val isAfter: Boolean =
+      localDateTime
+        .exists(ldt => ldt.isAfter(localDateTimeNow))
+
+    val isNow: Boolean =
+      localDateTime.exists(ldt => ldt.isEqual(localDateTimeNow))
+
+    if ( isAfter || isNow) {
       false
     } else {
-      // Need a new backup
       true
     }
 
@@ -355,25 +366,25 @@ object S3Manager extends DaemonApp {
     * @return the limit of a given folder
     */
   def getFolderLimit(backupCategory: BackupCategory.Value, backupFrequency: BackupFrequency.Value): Int = {
-
-    val freqMatch = backupFrequency.toString
-    val typeMatch = backupCategory.toString
-
-    freqMatch match {
-      case "hourly" => typeMatch match {
-        case "gitlab" => config.gitlab.hourly
-        case "postgres" => config.postgres.hourly
-      }
-      case "daily" => typeMatch match {
-        case "gitlab" => config.gitlab.daily
-        case "postgres" => config.postgres.daily
-      }
-      case "monthly" => typeMatch match {
-        case "gitlab" => config.gitlab.monthly
-        case "postgres" => config.postgres.monthly
+    val backupType: BackupTypes =
+      backupCategory match {
+        case BackupCategory.gitlab =>
+          config.gitlab
+        case BackupCategory.postgres =>
+          config.postgres
+        case BackupCategory.website =>
+          config.website
+        case unsupported =>
+          throw new RuntimeException(s"getFolderLimit -- does not support $unsupported")
       }
 
-      case _ => Int.MaxValue // hacky
+    backupFrequency match {
+      case BackupFrequency.hourly =>
+        backupType.hourly
+      case BackupFrequency.daily =>
+        backupType.daily
+      case BackupFrequency.monthly =>
+        backupType.monthly
     }
   }
 

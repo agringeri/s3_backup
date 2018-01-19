@@ -7,5 +7,6 @@ object BackupCategory extends Enumeration {
 
   val gitlab = Value
   val postgres = Value
+  val website = Value
 
 }
